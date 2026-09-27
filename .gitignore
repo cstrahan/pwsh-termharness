@@ -1,0 +1,10 @@
+# Build output and staged packages.
+out/
+.tools/
+src/TermHarness.Pty.Native/bin/
+src/TermHarness.Pty.Native/obj/
+# The compiled assembly and the native runtimes, staged by build.ps1 from the .NET project.
+src/TermHarness.Pty/lib/
+# Test results.
+TestResults/
+*.trx

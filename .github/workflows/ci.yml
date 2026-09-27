@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FZF_VERSION: 0.74.4
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: PSScriptAnalyzer
+        shell: pwsh
+        run: ./build.ps1 -Task Bootstrap, Lint
+
+  vendored:
+    name: Verify vendored libghostty-vt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the pinned hash against vendor/README.md
+        shell: pwsh
+        run: |
+          $readme = Get-Content -Raw src/TermHarness.Pty/vendor/README.md
+          if ($readme -notmatch '(?m)^\| SHA-256 \| `([0-9A-F]{64})` \|') { throw 'no SHA-256 in vendor/README.md' }
+          $expected = $Matches[1]
+          $actual = (Get-FileHash src/TermHarness.Pty/vendor/ghostty-vt-small.wasm -Algorithm SHA256).Hash
+          if ($actual -ne $expected) { throw "ghostty-vt-small.wasm is $actual, README says $expected" }
+          "hash ok: $actual"
+      - name: Verify Ghostty's minisign signature
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq minisign
+          # Ghostty's release signing key, from PACKAGING.md in ghostty-org/ghostty.
+          minisign -Vm src/TermHarness.Pty/vendor/ghostty-vt-small.wasm \
+            -x src/TermHarness.Pty/vendor/ghostty-vt-small.wasm.minisig \
+            -P RWQlAjJC23149WL2sEpT/l0QKy7hMIFhYdQOFy0Z7z7PbneUgvlsnYcV
+
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Install fzf (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $zip = "$env:RUNNER_TEMP\fzf.zip"
+          Invoke-WebRequest "https://github.com/junegunn/fzf/releases/download/v$env:FZF_VERSION/fzf-$env:FZF_VERSION-windows_amd64.zip" -OutFile $zip
+          Expand-Archive $zip -DestinationPath "$env:RUNNER_TEMP\fzf"
+          "$env:RUNNER_TEMP\fzf" | Out-File -Append $env:GITHUB_PATH
+      - name: Install fzf (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          curl -sSL "https://github.com/junegunn/fzf/releases/download/v${FZF_VERSION}/fzf-${FZF_VERSION}-linux_amd64.tar.gz" | tar -xz -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Build, then test
+        shell: pwsh
+        run: ./build.ps1 -Task Bootstrap, Build, Test -Verbosity Detailed
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}
+          path: out/test-results/
+      - name: Stage and package (proves the module trees are publishable)
+        shell: pwsh
+        run: ./build.ps1 -Task Stage, Package
+      - name: Rehearse a publish against a local repository
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./build.ps1 -Task PublishLocal

@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The compiled half of TermHarness.Pty: ConPTY interop, and the two pieces that talk to
+    libghostty-vt through wasmtime (the reply callback and the cell walk). This is a project rather
+    than Add-Type at import time so that the Wasmtime package brings its own native runtimes to the
+    build output, where build.ps1 stages them into the module's lib\ folder, and so that the code is
+    compiled once against the real assembly rather than against reference assemblies on every
+    machine that imports the module.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>TermHarness.Pty.Native</AssemblyName>
+    <RootNamespace>TermHarness.Pty</RootNamespace>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- Deterministic, so a rebuild of the same sources gives the same bytes. -->
+    <Deterministic>true</Deterministic>
+    <!-- The ConPTY package copies OpenConsole.exe for each host an x64 conpty.dll can run under. Its own
+         props decide this from PlatformTarget, which is AnyCPU here, so say it outright. -->
+    <ConptyRequiresx64Host>true</ConptyRequiresx64Host>
+    <ConptyRequiresARM64Host>true</ConptyRequiresARM64Host>
+    <!-- A library does not copy its package dependencies to the output by default; the module needs them staged. -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Wasmtime" Version="48.0.2" />
+    <PackageReference Include="Microsoft.Windows.Console.ConPTY" Version="1.24.260710001" />
+  </ItemGroup>
+
+</Project>

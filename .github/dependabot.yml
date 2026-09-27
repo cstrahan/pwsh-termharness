@@ -1,0 +1,11 @@
+version: 2
+updates:
+  # Wasmtime and the ConPTY package, through the .NET project.
+  - package-ecosystem: nuget
+    directory: /src/TermHarness.Pty.Native
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

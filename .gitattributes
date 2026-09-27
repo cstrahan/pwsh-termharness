@@ -1,0 +1,8 @@
+# LF everywhere, since the modules run on Windows, Linux and macOS alike. PowerShell 7 reads
+# either ending; only cmd.exe cares, and nothing here is a .cmd file.
+* text=auto eol=lf
+
+# Vendored binaries: never newline-normalise these.
+*.wasm binary
+*.minisig -text
+*.png binary

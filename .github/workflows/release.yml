@@ -1,0 +1,87 @@
+# Publishes one module to the PowerShell Gallery and attaches its zip to a GitHub release.
+#
+# Trigger: push a tag named <Module>/v<version>, e.g. TermHarness.KeySpec/v0.1.0. The version must
+# match the manifest (ModuleVersion, plus PSData.Prerelease when there is one), or the job stops
+# before publishing anything. A prerelease of KeySpec can't satisfy the harnesses' RequiredModules
+# minimum, so prerelease tags only make sense for a module nothing depends on.
+#
+# The 'psgallery' environment holds the PSGALLERY_API_KEY secret; give it a required reviewer so a
+# tag push alone can't publish. Gallery keys expire within a year, so note the renewal date.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'TermHarness.*/v*'
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+env:
+  FZF_VERSION: 0.74.4
+
+jobs:
+  release:
+    name: Publish ${{ github.ref_name }}
+    runs-on: windows-latest
+    environment: psgallery
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Work out the module and version from the tag
+        id: tag
+        shell: pwsh
+        run: |
+          if ('${{ github.ref_name }}' -notmatch '^(TermHarness\.\w+)/v(.+)$') { throw "unexpected tag '${{ github.ref_name }}'" }
+          $module = $Matches[1]
+          $version = $Matches[2]
+          $manifest = Import-PowerShellDataFile "src/$module/$module.psd1"
+          $expected = $manifest.ModuleVersion
+          if ($manifest.PrivateData.PSData['Prerelease']) { $expected += '-' + $manifest.PrivateData.PSData['Prerelease'] }
+          if ($version -ne $expected) { throw "tag says $version but the manifest says $expected" }
+          "module=$module" >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Install fzf
+        shell: pwsh
+        run: |
+          $zip = "$env:RUNNER_TEMP\fzf.zip"
+          Invoke-WebRequest "https://github.com/junegunn/fzf/releases/download/v$env:FZF_VERSION/fzf-$env:FZF_VERSION-windows_amd64.zip" -OutFile $zip
+          Expand-Archive $zip -DestinationPath "$env:RUNNER_TEMP\fzf"
+          "$env:RUNNER_TEMP\fzf" | Out-File -Append $env:GITHUB_PATH
+
+      - name: Build, lint, test, stage, package
+        shell: pwsh
+        run: ./build.ps1 -Task Bootstrap, Build, Lint, Test, Stage, Package
+
+      - name: Publish to the PowerShell Gallery
+        shell: pwsh
+        env:
+          PSGALLERY_API_KEY: ${{ secrets.PSGALLERY_API_KEY }}
+        run: ./build.ps1 -Task Publish -Module ${{ steps.tag.outputs.module }}
+
+      - name: Attest the package
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: out/${{ steps.tag.outputs.module }}-${{ steps.tag.outputs.version }}.zip
+
+      - name: GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ steps.tag.outputs.module }} ${{ steps.tag.outputs.version }}
+          prerelease: ${{ contains(steps.tag.outputs.version, '-') }}
+          files: out/${{ steps.tag.outputs.module }}-${{ steps.tag.outputs.version }}.zip
+          body: |
+            `${{ steps.tag.outputs.module }}` ${{ steps.tag.outputs.version }}, published to the
+            [PowerShell Gallery](https://www.powershellgallery.com/packages/${{ steps.tag.outputs.module }}/${{ steps.tag.outputs.version }}).
+
+            ```powershell
+            Install-PSResource ${{ steps.tag.outputs.module }} -Version ${{ steps.tag.outputs.version }}
+            ```
+
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md).
