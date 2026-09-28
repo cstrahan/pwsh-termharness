@@ -66,7 +66,7 @@ jobs:
         run: ./build.ps1 -Task Publish -Module ${{ steps.tag.outputs.module }}
 
       - name: Attest the package
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: out/${{ steps.tag.outputs.module }}-${{ steps.tag.outputs.version }}.zip
 
