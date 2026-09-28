@@ -5,9 +5,9 @@
 # lib\runtimes\<rid>\native the native libraries for each platform the package ships: the wasmtime
 # engine, and on Windows the redistributable console host (conpty.dll beside OpenConsole.exe).
 #
-# Native libraries are loaded by full path before anything references them: a loose assembly has
-# no deps.json-driven probing, but a module already in the process resolves by its plain name,
-# which is what the bindings' DllImports use.
+# Native libraries are loaded by full path, and the binding's DllImports are pointed at them
+# (NativeRuntime.cs): a loose assembly has no deps.json-driven probing, and on Linux and macOS a
+# library loaded by path does not satisfy a later lookup by name the way it does on Windows.
 #
 # Dot-sourced by the module and by the host process alike.
 
@@ -76,9 +76,9 @@ function Import-PtyNativeAssembly {
     Assert-PtyRuntime
     $files = @{}
     foreach ($file in Get-PtyRuntimeFile) { $files[$file.Name] = $file.Path }
-    # The engine first, by path: Wasmtime.Dotnet p/invokes 'wasmtime', which then resolves to the
-    # module already loaded rather than being searched for.
-    [void] [Runtime.InteropServices.NativeLibrary]::Load($files['Engine'])
     Add-Type -Path $files['Binding']
     Add-Type -Path $files['Assembly']
+    # Wasmtime.Dotnet p/invokes 'wasmtime' by name, which the runtime would look for beside pwsh,
+    # not in lib\. The assembly resolves that import to the engine loaded from here.
+    [TermHarness.Pty.NativeRuntime]::UseEngine($files['Engine'])
 }

@@ -106,7 +106,7 @@ function Get-ConsoleApp {
             # ConvertFrom-Json hands back a DateTime for an ISO-8601 string, so compare as dates:
             # comparing against a round-trip string would take every record for a stale one.
             $recorded = [datetime] $record.StartTime
-            if (-not $process -or $process.StartTime.ToUniversalTime() -ne $recorded.ToUniversalTime()) {
+            if (-not $process -or [Math]::Abs(($process.StartTime.ToUniversalTime() - $recorded.ToUniversalTime()).TotalSeconds) -gt 2) {
                 [IO.File]::Delete($file.FullName)
                 if (Test-Path -LiteralPath $record.ScreenPath) { [IO.File]::Delete($record.ScreenPath) }
                 continue

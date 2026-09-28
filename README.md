@@ -8,7 +8,7 @@ the keyboard.
 |---|---|---|
 | [TermHarness.KeySpec](src/TermHarness.KeySpec/README.md) | Parses keystrokes and mouse actions written in [AutoHotkey's `Send` syntax](https://www.autohotkey.com/docs/v2/lib/Send.htm) (`'find{Enter}'`, `'^s'`, `'{Click 40 10}'`) into input events. | Windows, Linux, macOS |
 | [TermHarness.Console](src/TermHarness.Console/README.md) | Runs a program in a hidden Windows console, injects keys and mouse, and reads the character grid conhost rendered. No dependencies beyond Win32. | Windows |
-| [TermHarness.Pty](src/TermHarness.Pty/README.md) | Runs a program under a pseudo console and renders its output with [libghostty-vt](https://github.com/ghostty-org/ghostty), a real terminal emulator: colours, attributes, scrollback and reflow, read back as text, VT, HTML or styled runs. | Windows today; the emulator runs anywhere, and a Unix pty backend is planned |
+| [TermHarness.Pty](src/TermHarness.Pty/README.md) | Runs a program under a pseudo console and renders its output with [libghostty-vt](https://github.com/ghostty-org/ghostty), a real terminal emulator: colours, attributes, scrollback and reflow, read back as text, VT, HTML or styled runs. | Windows, Linux, macOS |
 
 ```powershell
 Install-PSResource TermHarness.Console      # brings TermHarness.KeySpec with it
@@ -43,15 +43,16 @@ try {
 | | TermHarness.Console | TermHarness.Pty |
 |---|---|---|
 | How the screen is read | conhost renders it; the harness reads the character grid | the harness renders the VT stream itself |
-| Dependencies | none | wasmtime and a console host, shipped with the module (about 23 MB) |
+| Dependencies | none | wasmtime, shipped with the module (about 22 MB per platform), plus a console host on Windows |
 | Colours and attributes | no | yes |
-| Mouse | console records or SGR, chosen per application | SGR; the console host adapts |
+| Mouse | console records or SGR, chosen per application | SGR; on Windows the console host adapts |
 | Scrollback and reflow | conhost's | a real terminal's |
 | Works on a bare machine | yes | yes, once installed |
 
 Reach for the console harness when the thing under test runs in a Windows console and text is
-enough. Reach for the pty harness when colours, reflow or genuine terminal semantics matter, or
-when you would rather not care which mouse delivery an application wants.
+enough. Reach for the pty harness when colours, reflow or genuine terminal semantics matter, when
+you would rather not care which mouse delivery an application wants, or when the program runs on
+Linux or macOS.
 
 ## Requirements
 
@@ -71,13 +72,15 @@ cd pwsh-termharness
 `build.ps1 -Task Bootstrap` saves Pester and PSScriptAnalyzer into `.tools\modules`; nothing is
 installed into your own module folders. The console and pty tests drive real programs and need
 `fzf` on `PATH`; they are skipped, visibly, when it isn't there or the platform can't run them.
+`-Runtime` picks which native runtimes are staged (this machine's by default; a release ships
+`win-x64`, `linux-x64` and `osx-arm64`).
 
 Layout:
 
 - `src/<Module>/`: one folder per module, each with its manifest, README and tests tags.
-- `src/TermHarness.Pty.Native/`: the C# half of the pty harness (ConPTY interop, the libghostty
-  callback and cell reader). Building it pulls the Wasmtime and ConPTY packages, and `build.ps1`
-  stages their native libraries into `src/TermHarness.Pty/lib/` (git-ignored).
+- `src/TermHarness.Pty.Native/`: the C# half of the pty harness (ConPTY and Unix pty interop, the
+  libghostty callback and cell reader). Building it pulls the Wasmtime and ConPTY packages, and
+  `build.ps1` stages their native libraries into `src/TermHarness.Pty/lib/` (git-ignored).
 - `src/TermHarness.Pty/vendor/`: libghostty-vt as WebAssembly, with its signature and the reason
   it is vendored rather than fetched.
 - `tests/`: Pester tests, tagged `KeySpec`, `Console`, `Pty`, `Manifest`; the ones that start

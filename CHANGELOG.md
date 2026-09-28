@@ -30,4 +30,6 @@ Each module is versioned and released on its own; entries are grouped by module.
 - The C# interop is now compiled once into `TermHarness.Pty.Native.dll` (a .NET 8 project) instead
   of being compiled by `Add-Type` on every import, and the module ships wasmtime and the
   redistributable console host under `lib/runtimes/<rid>/native` rather than fetching them.
+- Runs on Linux and macOS as well: the program is started as a session leader on a Unix pty with
+  posix_spawn, and its bytes feed the emulator directly, with no console host in between.
 - Requires PowerShell 7.4 or later.

@@ -57,7 +57,7 @@ jobs:
 
       - name: Build, lint, test, stage, package
         shell: pwsh
-        run: ./build.ps1 -Task Bootstrap, Build, Lint, Test, Stage, Package
+        run: ./build.ps1 -Task Bootstrap, Build, Lint, Test, Stage, Package -Runtime win-x64, linux-x64, osx-arm64
 
       - name: Publish to the PowerShell Gallery
         shell: pwsh

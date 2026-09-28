@@ -1,22 +1,23 @@
-# ConPTY interop: start a program attached to a pseudo console and get its byte streams.
+# Pseudo terminal interop: start a program attached to a pty and get its byte streams.
 #
-# Windows' pseudo console (Windows 10 1809+) is what a terminal emulator uses: the program thinks
-# it has a console, and we get the VT stream it draws with, rather than a rendered character grid.
-# That's the whole difference from TermHarness.Console, which reads conhost's grid instead.
+# Two backends, both in the TermHarness.Pty.Native assembly (NativeRuntime.ps1 loads it):
 #
-# Which console host serves the pty is the thing that matters here. kernel32's CreatePseudoConsole
-# binds to the machine's own conhost, which on Windows 10 (10.0.19041.1, from 2020) has no mouse
-# plumbing at all: a client asking for mouse gets nothing, and injected reports produce nothing.
-# Microsoft ships a current one for exactly this case, as the MIT-licensed
-# Microsoft.Windows.Console.ConPTY package (conpty.dll plus OpenConsole.exe, built from
-# microsoft/terminal). The module ships it under lib\runtimes\win-<arch>\native, and this prefers it.
+# - Windows: ConPTY (PtyNative.cs). Windows' pseudo console (Windows 10 1809+) is what a terminal
+#   emulator uses: the program thinks it has a console, and we get the VT stream it draws with,
+#   rather than a rendered character grid. That's the whole difference from TermHarness.Console.
+#   Which console host serves the pty matters: kernel32's CreatePseudoConsole binds to the
+#   machine's own conhost, which on Windows 10 (10.0.19041.1, from 2020) has no mouse plumbing at
+#   all. Microsoft ships a current one for exactly this case, as the MIT-licensed
+#   Microsoft.Windows.Console.ConPTY package (conpty.dll plus OpenConsole.exe, built from
+#   microsoft/terminal). The module ships it under lib\runtimes\win-<arch>\native, and this
+#   prefers it. That is also what node-pty does, and so VS Code: it vendors the same two binaries
+#   and picks between kernel32 and conpty.dll with a `useConptyDll` flag. Its default is still
+#   kernel32, so anything using node-pty as it comes has the same gap.
 #
-# That is also what node-pty does, and so VS Code: it vendors the same two binaries and picks
-# between kernel32 and conpty.dll with a `useConptyDll` flag. Its default is still kernel32, so
-# anything using node-pty as it comes has the same gap.
+# - Linux and macOS: a Unix pty (UnixPty.cs), with the program spawned as a session leader that
+#   owns it. There is no console host in between: the program's bytes are the terminal's input.
 #
-# The interop itself is C# in the TermHarness.Pty.Native assembly (PtyNative.cs); NativeRuntime.ps1
-# loads it. Dot-source this; it defines Start-PtyProcess, Resize-PtyProcess and Stop-PtyProcess.
+# Dot-source this; it defines Start-PtyProcess, Resize-PtyProcess and Stop-PtyProcess.
 
 function Get-ConptyLibraryPath {
     <#
@@ -57,10 +58,19 @@ function Initialize-Conpty {
     $script:ConptyLoaded = $true
 }
 
+function Test-UnixPty {
+    param($Pty)
+    return $Pty.GetType().Name -eq 'UnixPtyProcess'
+}
+
 function Start-PtyProcess {
     <#
     .SYNOPSIS
-    Starts a command attached to a new pseudo console.
+    Starts a command attached to a new pseudo terminal.
+
+    .DESCRIPTION
+    On Windows the command line is handed to CreateProcess as it is. Elsewhere /bin/sh runs it,
+    as a terminal would, after changing to the working directory.
 
     .EXAMPLE
     $pty = Start-PtyProcess -CommandLine 'pwsh -NoLogo' -Columns 120 -Rows 30
@@ -71,12 +81,20 @@ function Start-PtyProcess {
         [string] $WorkingDirectory = $PWD.Path,
         [int] $Columns = 120,
         [int] $Rows = 30,
-        # Conpty is the redistributable host shipped with the module and handles mouse; Inbox is
-        # whatever kernel32's CreatePseudoConsole gives us, which on Windows 10 forwards none.
-        # Auto takes Conpty when it is present.
+        # Windows only. Conpty is the redistributable host shipped with the module and handles
+        # mouse; Inbox is whatever kernel32's CreatePseudoConsole gives us, which on Windows 10
+        # forwards none. Auto takes Conpty when it is present.
         [ValidateSet('Auto', 'Conpty', 'Inbox')] [string] $ConsoleHost = 'Auto'
     )
     Import-PtyNativeAssembly
+
+    if (-not $IsWindows) {
+        $pty = [TermHarness.Pty.UnixNative]::Start($CommandLine, $WorkingDirectory, [short] $Columns, [short] $Rows)
+        # Reported alongside the Windows host for Get-PtyInfo: here the terminal is ours alone.
+        Add-Member -InputObject $pty -NotePropertyName ConsoleHost -NotePropertyValue 'pty' -Force
+        return $pty
+    }
+
     $library = if ($ConsoleHost -ne 'Inbox') { Get-ConptyLibraryPath } else { $null }
     if ($ConsoleHost -eq 'Conpty' -and -not $library) {
         throw "conpty.dll and OpenConsole.exe were not found in $(Get-PtyNativeDirectory); the module's runtime is incomplete (see build.ps1 -Task Build)."
@@ -92,20 +110,25 @@ function Start-PtyProcess {
 function Resize-PtyProcess {
     <#
     .SYNOPSIS
-    Tells the pseudo console its new size, which the program sees as a resize.
+    Tells the pseudo terminal its new size, which the program sees as a resize.
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)] $Pty, [Parameter(Mandatory)] [int] $Columns, [Parameter(Mandatory)] [int] $Rows)
-    [TermHarness.Pty.Native]::Resize($Pty, [short] $Columns, [short] $Rows)
+    if (Test-UnixPty $Pty) {
+        [TermHarness.Pty.UnixNative]::Resize($Pty, [short] $Columns, [short] $Rows)
+    } else {
+        [TermHarness.Pty.Native]::Resize($Pty, [short] $Columns, [short] $Rows)
+    }
 }
 
 function Test-PtyProcessExited {
     <#
     .SYNOPSIS
-    Whether the program attached to the pseudo console has exited.
+    Whether the program attached to the pseudo terminal has exited.
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)] $Pty)
+    if (Test-UnixPty $Pty) { return [TermHarness.Pty.UnixNative]::HasExited($Pty) }
     return [TermHarness.Pty.Native]::HasExited($Pty)
 }
 
@@ -122,10 +145,15 @@ function Stop-PtyProcessTree {
 function Stop-PtyProcess {
     <#
     .SYNOPSIS
-    Closes the pseudo console and stops the program and everything it started.
+    Closes the pseudo terminal and stops the program and everything it started.
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)] $Pty)
+    if (Test-UnixPty $Pty) {
+        # The Unix side signals the program's whole session itself.
+        [TermHarness.Pty.UnixNative]::Stop($Pty)
+        return
+    }
     if ($Pty.ProcessId) { Stop-PtyProcessTree -Id $Pty.ProcessId }
     [TermHarness.Pty.Native]::Stop($Pty)
 }

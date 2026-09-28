@@ -1,10 +1,10 @@
-# Tests for TermHarness.Pty. These start real programs under a pseudo console, so they need
-# Windows and the staged runtime (build.ps1 -Task Build), and take a few seconds. The mouse ones
-# also need fzf on PATH.
+# Tests for TermHarness.Pty. These start real programs under a pseudo terminal, so they need the
+# staged runtime (build.ps1 -Task Build), and take a few seconds. The mouse ones also need fzf on
+# PATH.
 
 BeforeDiscovery {
     $script:RuntimeStaged = Test-Path -LiteralPath (Join-Path $PSScriptRoot '..' 'src' 'TermHarness.Pty' 'lib' 'TermHarness.Pty.Native.dll')
-    $script:CanRun = [bool] $IsWindows -and $RuntimeStaged
+    $script:CanRun = $RuntimeStaged
     $script:HasFzf = [bool] (Get-Command fzf -ErrorAction SilentlyContinue)
 }
 
@@ -17,6 +17,34 @@ Describe 'TermHarness.Pty' -Tag Pty, Interactive -Skip:(-not $CanRun) {
         $script:Fixtures = Join-Path $PSScriptRoot 'fixtures'
         $script:ColourProbe = Join-Path $Fixtures 'ColourProbe.ps1'
 
+        # The shell each test drives, the prompt that says it is ready, and its idioms: cmd.exe on
+        # Windows, an interactive sh elsewhere.
+        if ($IsWindows) {
+            $script:Shell = 'cmd.exe'
+            $script:Ready = 'Microsoft Windows'
+            $script:SizeCommand = 'mode con'
+            $script:SizePattern = 'Columns:\s+60'
+            $script:ThirtyLines = 'for /L %i in (1,1,30) do @echo line %i'
+            # Pin the shell fzf runs --preview with; see the console tests for why. 'cmd' rather
+            # than 'pwsh' because the assertions expect cmd's quoting of {}.
+            $env:SHELL = 'cmd'
+        } else {
+            $script:Shell = 'PS1=''harness$ '' exec sh -i'
+            # No trailing space: the text formatter trims the end of each row.
+            $script:Ready = 'harness\$'
+            $script:SizeCommand = 'stty size'
+            $script:SizePattern = '^20 60'
+            $script:ThirtyLines = 'for i in $(seq 1 30); do echo line $i; done'
+        }
+
+        # fzf over a fixed list, with a preview that shows the selection. The command line goes
+        # through /bin/sh on Unix, so there the outer quotes are single ones, which keep `$_`
+        # from the shell, and the preview's own quotes go inside.
+        function Get-FzfCommandLine([string] $Extra) {
+            if ($IsWindows) { return "pwsh -NoProfile -Command `"1..40 | ForEach-Object { 'item ' + `$_ } | fzf $Extra --preview 'echo SEL={}'`"" }
+            return "pwsh -NoProfile -Command '1..40 | ForEach-Object { `"item `" + `$_ } | fzf $Extra --preview `"echo SEL={}`"'"
+        }
+
         function Use-Pty([string] $CommandLine, [int] $Columns, [int] $Rows, [string] $Ready, [scriptblock] $Body) {
             $session = Start-PtyApp -CommandLine $CommandLine -WorkingDirectory $Fixtures -Columns $Columns -Rows $Rows
             try {
@@ -26,10 +54,13 @@ Describe 'TermHarness.Pty' -Tag Pty, Interactive -Skip:(-not $CanRun) {
         }
 
         # The preview is drawn in pieces, so match a complete SEL="item N" rather than the bare
-        # label: 'SEL=' can be on screen a frame before its value is.
+        # label: 'SEL=' can be on screen a frame before its value is. cmd's quoting keeps the
+        # quotes around the item; sh's does not, and there whatever follows the number (the
+        # preview's border, or the end of the row) has to do.
         function Get-Selection($Session) {
-            $line = Get-PtyScreen $Session | Where-Object { $_ -match 'SEL="item \d+"' } | Select-Object -First 1
-            if ($line -match 'SEL="(item \d+)"') { return $Matches[1] }
+            foreach ($line in @(Get-PtyScreen $Session)) {
+                if ($line -match 'SEL="(item \d+)"' -or $line -match 'SEL=(item \d+)(?=\D|$)') { return $Matches[1] }
+            }
             return ''
         }
 
@@ -48,15 +79,15 @@ Describe 'TermHarness.Pty' -Tag Pty, Interactive -Skip:(-not $CanRun) {
 
     Context 'a program under a pseudo console' {
         It 'runs, takes keys, and has its output rendered' {
-            Use-Pty 'cmd.exe' 80 24 'Microsoft Windows' {
+            Use-Pty $Shell 80 24 $Ready {
                 param($session)
                 Send-PtyKeys $session 'echo pty-harness-works{Enter}' -SettleMilliseconds 700 | Out-Null
                 @(Get-PtyScreen $session -NonEmpty) -match '^pty-harness-works' | Should -Not -BeNullOrEmpty
             }
         }
 
-        It 'is served by the redistributable console host' {
-            Use-Pty 'cmd.exe' 80 24 'Microsoft Windows' {
+        It 'is served by the redistributable console host' -Skip:(-not $IsWindows) {
+            Use-Pty $Shell 80 24 $Ready {
                 param($session)
                 (Get-PtyInfo $session).consoleHost | Should -Match 'conpty\.dll$'
                 # Say that we asked for it and believe what actually happened: conpty.dll falls
@@ -68,15 +99,15 @@ Describe 'TermHarness.Pty' -Tag Pty, Interactive -Skip:(-not $CanRun) {
         }
 
         It 'tells the program about a resize, which redraws for the new size' {
-            Use-Pty 'cmd.exe' 80 24 'Microsoft Windows' {
+            Use-Pty $Shell 80 24 $Ready {
                 param($session)
                 $state = Set-PtySize $session -Columns 60 -Rows 20 -SettleMilliseconds 500
                 $state.columns | Should -Be 60
                 $state.rows | Should -Be 20
                 # Ask the program itself what size it thinks it has.
-                Send-PtyKeys $session 'mode con{Enter}' -SettleMilliseconds 800 | Out-Null
-                $line = Get-PtyScreen $session -NonEmpty | Where-Object { $_ -match 'Columns:\s+(\d+)' } | Select-Object -First 1
-                $line | Should -Match 'Columns:\s+60'
+                Send-PtyKeys $session "$SizeCommand{Enter}" -SettleMilliseconds 800 | Out-Null
+                $line = Get-PtyScreen $session -NonEmpty | Where-Object { $_ -match $SizePattern } | Select-Object -First 1
+                $line | Should -Match $SizePattern
             }
         }
 
@@ -96,9 +127,9 @@ Describe 'TermHarness.Pty' -Tag Pty, Interactive -Skip:(-not $CanRun) {
     Context 'the viewport and the scrollback' {
         It 'gives the viewport by default, and everything with -Scrollback' {
             # More output than fits, so some of it has scrolled off.
-            Use-Pty 'cmd.exe' 80 10 'Microsoft Windows' {
+            Use-Pty $Shell 80 10 $Ready {
                 param($session)
-                Send-PtyKeys $session 'for /L %i in (1,1,30) do @echo line %i{Enter}' -SettleMilliseconds 1200 | Out-Null
+                Send-PtyKeys $session "$ThirtyLines{Enter}" -SettleMilliseconds 1200 | Out-Null
                 $visible = @(Get-PtyScreen $session -NonEmpty)
                 $everything = @(Get-PtyScreen $session -Scrollback -NonEmpty)
                 $visible.Count | Should -BeLessOrEqual 10 -Because 'the viewport should fit the terminal'
@@ -112,9 +143,9 @@ Describe 'TermHarness.Pty' -Tag Pty, Interactive -Skip:(-not $CanRun) {
         It 'keeps every form of the screen to the viewport' {
             # libghostty's formatter emits history and viewport together, so Vt and Html would
             # carry the whole scrollback if nothing trimmed them.
-            Use-Pty 'cmd.exe' 80 10 'Microsoft Windows' {
+            Use-Pty $Shell 80 10 $Ready {
                 param($session)
-                Send-PtyKeys $session 'for /L %i in (1,1,30) do @echo line %i{Enter}' -SettleMilliseconds 1200 | Out-Null
+                Send-PtyKeys $session "$ThirtyLines{Enter}" -SettleMilliseconds 1200 | Out-Null
                 foreach ($form in 'Vt', 'Html') {
                     $screen = Get-PtyScreen $session -As $form
                     $screen | Should -Match 'line 30' -Because "-As $form should show the last line"
@@ -210,9 +241,9 @@ Describe 'TermHarness.Pty' -Tag Pty, Interactive -Skip:(-not $CanRun) {
 
     Context 'sessions' {
         It 'can be picked up by another process' {
-            $session = Start-PtyApp -CommandLine 'cmd.exe' -WorkingDirectory $Fixtures -Name 'pty-test' -Columns 80 -Rows 24
+            $session = Start-PtyApp -CommandLine $Shell -WorkingDirectory $Fixtures -Name 'pty-test' -Columns 80 -Rows 24
             try {
-                Wait-PtyText $session 'Microsoft Windows' -TimeoutSeconds 30 | Out-Null
+                Wait-PtyText $session $Ready -TimeoutSeconds 30 | Out-Null
                 $script = @"
 `$env:PSModulePath = '$(Join-Path $PSScriptRoot '..' 'src')' + [IO.Path]::PathSeparator + `$env:PSModulePath
 Import-Module '$ModulePath'
@@ -226,8 +257,8 @@ Send-PtyKeys `$s 'echo from-another-process{Enter}' -SettleMilliseconds 700 | Ou
         }
 
         It 'leaves nothing behind when stopped' {
-            $session = Start-PtyApp -CommandLine 'cmd.exe' -WorkingDirectory $Fixtures -Name 'pty-test' -Columns 80 -Rows 24
-            Wait-PtyText $session 'Microsoft Windows' -TimeoutSeconds 30 | Out-Null
+            $session = Start-PtyApp -CommandLine $Shell -WorkingDirectory $Fixtures -Name 'pty-test' -Columns 80 -Rows 24
+            Wait-PtyText $session $Ready -TimeoutSeconds 30 | Out-Null
             $hostId = $session.HostProcessId
             Stop-PtyApp $session
             { Get-PtyApp -Name 'pty-test' } | Should -Throw -ExpectedMessage "*no pty session named 'pty-test'*"
@@ -237,19 +268,12 @@ Send-PtyKeys `$s 'echo from-another-process{Enter}' -SettleMilliseconds 700 | Ou
     }
 
     Context 'mouse' -Skip:(-not $HasFzf) {
-        BeforeAll {
-            # Pin the shell fzf runs --preview with; see the console tests for why. 'cmd' rather
-            # than 'pwsh' because the assertions expect cmd's quoting of {}.
-            $env:SHELL = 'cmd'
-            # Both fzf renderers are driven with the same SGR reports: the console host adapts,
-            # turning them into console records for the tcell renderer and passing them through
-            # for the light one. This only works with the redistributable OpenConsole; the inbox
-            # host forwards no mouse at all.
-            $script:Items = "1..40 | ForEach-Object { 'item ' + `$_ }"
-        }
-
+        # Both fzf renderers are driven with the same SGR reports. On Windows the console host
+        # adapts, turning them into console records for the tcell renderer and passing them
+        # through for the light one; this only works with the redistributable OpenConsole, since
+        # the inbox host forwards no mouse at all. On Unix the bytes reach fzf as they are.
         It 'drives full-screen fzf with the wheel and a click' {
-            Use-Pty "pwsh -NoProfile -Command `"$Items | fzf --preview 'echo SEL={}'`"" 100 24 'SEL="item' {
+            Use-Pty (Get-FzfCommandLine '') 100 24 'SEL="?item' {
                 param($session)
                 $selected = Wait-Selection $session
                 $selected | Should -Be 'item 1'
@@ -264,7 +288,7 @@ Send-PtyKeys `$s 'echo from-another-process{Enter}' -SettleMilliseconds 700 | Ou
         It 'drives fzf --height with the same events, by a different route' {
             # Aim inside the box: with --height the application draws in part of the screen, and
             # events outside it are ignored (which looks exactly like mouse being broken).
-            Use-Pty "pwsh -NoProfile -Command `"$Items | fzf --height 60% --preview 'echo SEL={}'`"" 100 30 'SEL="item' {
+            Use-Pty (Get-FzfCommandLine '--height 60%') 100 30 'SEL="?item' {
                 param($session)
                 $selected = Wait-Selection $session
                 $selected | Should -Be 'item 1'

@@ -26,7 +26,7 @@
                           'Stop-PtyApp')
     PrivateData = @{
         PSData = @{
-            Tags         = @('Terminal', 'Testing', 'TUI', 'ConPTY', 'Pty', 'PSEdition_Core', 'Windows')
+            Tags         = @('Terminal', 'Testing', 'TUI', 'ConPTY', 'Pty', 'PSEdition_Core', 'Windows', 'Linux', 'MacOS')
             LicenseUri   = 'https://github.com/cstrahan/pwsh-termharness#license'
             ProjectUri   = 'https://github.com/cstrahan/pwsh-termharness'
             ReleaseNotes = 'https://github.com/cstrahan/pwsh-termharness/blob/main/CHANGELOG.md'

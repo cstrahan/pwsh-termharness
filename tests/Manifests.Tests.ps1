@@ -107,7 +107,7 @@ Describe 'Platform guards' -Tag Manifest {
         $module.ExportedFunctions.Keys | Should -Contain 'ConvertFrom-KeySpec'
     }
 
-    It 'refuses to import <_> off Windows, and says why' -Skip:$IsWindows -ForEach @('TermHarness.Console', 'TermHarness.Pty') {
+    It 'refuses to import <_> off Windows, and says why' -Skip:$IsWindows -ForEach @('TermHarness.Console') {
         $env:PSModulePath = $Source + [IO.Path]::PathSeparator + $env:PSModulePath
         { Import-Module (Join-Path $Source $_ "$_.psd1") -Force -ErrorAction Stop } | Should -Throw -ExpectedMessage '*Windows*'
     }

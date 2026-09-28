@@ -22,9 +22,9 @@ param(
     # tagged 'Interactive' as well).
     [string[]] $Tag,
     [string[]] $ExcludeTag,
-    # Native runtimes to stage into TermHarness.Pty. The Windows x64 one is what the module
-    # supports today; the others are staged for whoever ports the pty backend.
-    [string[]] $Runtime = @('win-x64'),
+    # Native runtimes to stage into TermHarness.Pty: this machine's by default. A release stages
+    # every platform the package supports (see release.yml).
+    [string[]] $Runtime = @([Runtime.InteropServices.RuntimeInformation]::RuntimeIdentifier),
     # Publish: the PowerShell Gallery API key (or set $env:PSGALLERY_API_KEY).
     [string] $ApiKey = $env:PSGALLERY_API_KEY,
     # Publish: which modules, in dependency order. Default: all of them.
@@ -58,9 +58,6 @@ function Invoke-Bootstrap {
         Write-Host "  saving $($entry.Key) $($entry.Value)"
         Save-PSResource -Name $entry.Key -Version $entry.Value -Path $Tools -TrustRepository -Quiet
     }
-    if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
-        throw 'the .NET SDK (8.0 or later) is needed to build TermHarness.Pty.Native: https://dotnet.microsoft.com/download'
-    }
 }
 
 function Use-Tools {
@@ -83,6 +80,9 @@ function Invoke-Clean {
 
 function Invoke-Build {
     Write-Step 'Build: TermHarness.Pty.Native'
+    if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
+        throw 'the .NET SDK (8.0 or later) is needed to build TermHarness.Pty.Native: https://dotnet.microsoft.com/download'
+    }
     & dotnet build $NativeProject -c Release --nologo -v quiet
     if ($LASTEXITCODE -ne 0) { throw "dotnet build failed with exit code $LASTEXITCODE" }
 

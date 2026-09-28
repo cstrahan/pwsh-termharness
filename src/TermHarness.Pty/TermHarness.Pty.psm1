@@ -13,10 +13,6 @@ $script:SessionDirectory = [IO.Path]::Combine([IO.Path]::GetTempPath(), 'termhar
 # The key syntax is TermHarness.KeySpec's, which the manifest requires; only the delivery differs.
 . (Join-Path $PSScriptRoot 'NativeRuntime.ps1')
 
-if (-not $IsWindows) {
-    throw 'TermHarness.Pty runs only on Windows for now: it creates the pseudo console with ConPTY. A Unix backend over openpty is planned.'
-}
-
 # Virtual key -> the escape sequence a terminal sends for it. Keys that produce a character carry
 # it in the event instead, so only the ones that don't are listed.
 $script:KeySequences = @{
@@ -167,11 +163,24 @@ function Start-PtyApp {
         RawLogPath       = $rawLogPath
     } | ConvertTo-Json | Set-Content -LiteralPath $startPath -Encoding utf8
 
-    # Hidden, and with nothing redirected: a child only inherits the pseudo console's handles
-    # when its parent's own standard handles are console handles (see PtyHost.ps1).
-    $process = Start-Process pwsh -PassThru -WindowStyle Hidden -ArgumentList @(
-        '-NoProfile', '-NoLogo', '-File', $script:HostScript, '-StartFile', $startPath
-    )
+    # On Windows: hidden, and with nothing redirected, since a child only inherits the pseudo
+    # console's handles when its parent's own standard handles are console handles (see
+    # PtyHost.ps1). Elsewhere the opposite: the host must not inherit this process's handles,
+    # or anything waiting for our output to end (a pipe, a CI step) waits for the host too.
+    $hostArguments = @{
+        FilePath     = 'pwsh'
+        PassThru     = $true
+        ArgumentList = @('-NoProfile', '-NoLogo', '-File', $script:HostScript, '-StartFile', $startPath)
+    }
+    if ($IsWindows) {
+        $hostArguments['WindowStyle'] = 'Hidden'
+    } else {
+        # Not /dev/null twice: Start-Process refuses the same file for two streams. Input stays
+        # inherited; the host never reads it, and a reader holds nobody up.
+        $hostArguments['RedirectStandardOutput'] = '/dev/null'
+        $hostArguments['RedirectStandardError'] = "$logPath.stderr"
+    }
+    $process = Start-Process @hostArguments -ErrorAction Stop
 
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while (-not (Test-Path -LiteralPath $readyPath)) {
@@ -228,8 +237,10 @@ function Get-PtyApp {
             if (-not $record) { [IO.File]::Delete($file.FullName); continue }
             $process = Get-Process -Id $record.HostProcessId -ErrorAction SilentlyContinue
             # Process ids get reused, so the start time decides whether this is still the host.
+            # With a tolerance: on Linux .NET derives a start time from the boot time as each
+            # process measures it, so two processes can disagree by milliseconds.
             $recorded = [datetime] $record.StartTime
-            if (-not $process -or $process.StartTime.ToUniversalTime() -ne $recorded.ToUniversalTime()) {
+            if (-not $process -or [Math]::Abs(($process.StartTime.ToUniversalTime() - $recorded.ToUniversalTime()).TotalSeconds) -gt 2) {
                 [IO.File]::Delete($file.FullName)
                 continue
             }
@@ -586,7 +597,7 @@ function Stop-PtyApp {
             if ($process) {
                 if (-not $process.WaitForExit(2000)) { Stop-Process -Id $target.HostProcessId -Force -ErrorAction SilentlyContinue }
             }
-            foreach ($path in $target.RecordPath, $target.LogPath, $target.StartPath, $target.RawLogPath) {
+            foreach ($path in $target.RecordPath, $target.LogPath, "$($target.LogPath).stderr", $target.StartPath, $target.RawLogPath) {
                 if ($path -and (Test-Path -LiteralPath $path)) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
             }
         }

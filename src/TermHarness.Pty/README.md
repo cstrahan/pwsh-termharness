@@ -1,7 +1,8 @@
 # TermHarness.Pty (experimental)
 
-Drives an interactive program through a Windows pseudo console (ConPTY) and renders the VT stream
-it produces with [libghostty-vt](vendor/README.md), so the screen can be read back as text.
+Drives an interactive program through a pseudo terminal (ConPTY on Windows, a pty on Linux and
+macOS) and renders the VT stream it produces with [libghostty-vt](vendor/README.md), so the screen
+can be read back as text, with its colours, or as a page.
 
 ```powershell
 Install-PSResource TermHarness.Pty    # brings TermHarness.KeySpec with it
@@ -39,13 +40,39 @@ been set up. Reach for this one when the thing under test depends on genuine ter
 reflow, scrollback, VT semantics — rather than on conhost's rendering of it, or when you would
 rather not care which mouse delivery an application wants.
 
+## On Linux and macOS
+
+The same cmdlets, the same syntax, and no console host in between: the program's bytes are the
+terminal's input. `Start-PtyApp`'s command line is run by `/bin/sh` after a `cd` into the working
+directory, so `'PS1="> " exec sh -i'` or `'nvim README.md'` both do what a terminal would, and
+`TERM` is `xterm-256color`. Three things worth knowing:
+
+- **The program is a session leader that owns the terminal.** It is started with `posix_spawn`
+  (`UnixPty.cs`; forking a .NET process is unsafe), made a session leader, and opens the slave by
+  path in the child, which is what makes the pty its controlling terminal: job control, SIGHUP
+  when the session is stopped, SIGWINCH on resize. `Stop-PtyApp` sends SIGHUP to the process
+  group, then SIGKILL, and on Linux also to anything else left in the session (a shell with job
+  control puts each job in its own group).
+- **Reads never fail early.** The host keeps its own descriptor on the slave, so reading the
+  master before the program has opened it, or after it has exited, blocks rather than failing
+  with EIO, and output that arrived just before exit is still readable. Exit is detected with
+  `waitpid`.
+- **Resizing on Apple silicon goes through `stty`.** `ioctl` is variadic, and Apple's arm64 ABI
+  passes variadic arguments on the stack, where a P/Invoke declared with fixed parameters never
+  puts them. Elsewhere it is one `TIOCSWINSZ` on the master.
+
+The text formatter trims the end of each row, so a prompt that ends in a space matches
+`'harness\$'`, not `'harness\$ '`.
+
 ## Two constraints that shaped this
 
-**The host process must not have redirected standard handles.** A child attached to a pseudo
-console only picks up the console's handles when its parent's own standard handles are console
-handles. Give the host a redirected stdout and the child inherits *that* instead, so its output
-never reaches the pty and the screen stays empty. The host therefore runs hidden, with its own
-console, and logs to a file rather than to stdout.
+**The host process must not have redirected standard handles, on Windows.** A child attached to a
+pseudo console only picks up the console's handles when its parent's own standard handles are
+console handles. Give the host a redirected stdout and the child inherits *that* instead, so its
+output never reaches the pty and the screen stays empty. The host therefore runs hidden, with its
+own console, and logs to a file rather than to stdout. On Unix it is the other way round: the
+host's output *is* redirected, or whatever is waiting for the caller's output to end (a pipe, a
+CI step) waits for the host as well.
 
 **A pseudo console's byte stream belongs to whoever created it.** Nobody can attach later and
 recover the state, the way any process can attach to a console and read conhost's grid. So a
@@ -229,6 +256,8 @@ space written after an attribute reset can come back carrying the old attribute.
 | `PtyNative.ps1` | picks the console host, and wraps the interop |
 | `Ghostty.ps1` | libghostty-vt in wasmtime: write bytes, read the screen, resize |
 | `../TermHarness.Pty.Native/PtyNative.cs` | ConPTY interop, against either `conpty.dll` or kernel32 |
+| `../TermHarness.Pty.Native/UnixPty.cs` | the Unix pty: `posix_openpt`, `posix_spawn` as a session leader, signals |
+| `../TermHarness.Pty.Native/NativeRuntime.cs` | points the Wasmtime binding at the engine under `lib\` |
 | `../TermHarness.Pty.Native/GhosttyReplySink.cs` | the callback that collects the terminal's answers to a program's queries |
 | `../TermHarness.Pty.Native/GhosttyScreenReader.cs` | the cell walk: colours, attributes, and coalescing them into runs |
 | `../../tests/fixtures/QueryProbe.ps1` | a fixture that asks the terminal a question and prints the answer |
@@ -242,7 +271,7 @@ space written after an attribute reset can come back carrying the old attribute.
 ./build.ps1 -Task Build, Test -Tag Pty
 ```
 
-They run real programs (cmd.exe, fzf) under a pseudo console: keyboard, resize that the program
+They run real programs (cmd.exe or sh, fzf) under a pseudo terminal: keyboard, resize that the program
 notices, colours and attributes in all four forms, session pickup from another process, cleanup,
 and mouse in both fzf renderers. The mouse ones are skipped when fzf isn't on PATH, and everything
 is skipped when the runtime hasn't been staged (`build.ps1 -Task Build`).
