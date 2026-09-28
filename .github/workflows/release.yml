@@ -71,7 +71,7 @@ jobs:
           subject-path: out/${{ steps.tag.outputs.module }}-${{ steps.tag.outputs.version }}.zip
 
       - name: GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: ${{ steps.tag.outputs.module }} ${{ steps.tag.outputs.version }}
           prerelease: ${{ contains(steps.tag.outputs.version, '-') }}
