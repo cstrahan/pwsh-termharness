@@ -17,7 +17,7 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: PSScriptAnalyzer
         shell: pwsh
         run: ./build.ps1 -Task Bootstrap, Lint
@@ -26,7 +26,7 @@ jobs:
     name: Verify vendored libghostty-vt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check the pinned hash against vendor/README.md
         shell: pwsh
         run: |
@@ -52,7 +52,7 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
