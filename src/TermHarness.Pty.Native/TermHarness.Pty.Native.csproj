@@ -29,7 +29,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Wasmtime" Version="48.0.2" />
+    <PackageReference Include="Wasmtime" Version="50.0.1" />
     <PackageReference Include="Microsoft.Windows.Console.ConPTY" Version="1.24.260710001" />
   </ItemGroup>
 
